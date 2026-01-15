@@ -1,0 +1,7 @@
+{
+  "name": "Bol-Lipi",
+  "description": "A voice-based AI form-filling assistant for illiterate and semi-literate users, powered by Google Gemini.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

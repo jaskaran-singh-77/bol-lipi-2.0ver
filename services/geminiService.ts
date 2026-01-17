@@ -100,3 +100,81 @@ export const generateSpeech = async (text: string, lang: 'hi-IN' | 'en-US'): Pro
     }
   }
 };
+
+/**
+ * Extracts form data from an uploaded document (image or PDF) using Gemini Vision.
+ */
+export const extractFromDocument = async (file: File): Promise<FormData> => {
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    // Convert file to base64
+    const base64Data = await fileToBase64(file);
+    const mimeType = file.type;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash-exp",
+      contents: [{
+        parts: [
+          { text: `Extract the following information from this document if available:
+- Full Name
+- Age
+- Gender
+- Phone Number
+- Occupation
+- Address
+
+Return the data in JSON format with these exact keys: fullName, age, gender, phone, occupation, address.
+If any field is not found, use an empty string for that field.` },
+          {
+            inlineData: {
+              mimeType: mimeType,
+              data: base64Data
+            }
+          }
+        ]
+      }],
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            fullName: { type: Type.STRING },
+            age: { type: Type.STRING },
+            gender: { type: Type.STRING },
+            phone: { type: Type.STRING },
+            occupation: { type: Type.STRING },
+            address: { type: Type.STRING }
+          },
+          required: ["fullName", "age", "gender", "phone", "occupation", "address"]
+        }
+      }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No response from AI");
+    
+    return JSON.parse(text) as FormData;
+  } catch (error: any) {
+    console.error("Gemini Document Extraction Error:", error);
+    if (error?.message?.includes('429') || error?.message?.includes('quota') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
+      throw new GeminiError(error.message, 429);
+    }
+    throw error;
+  }
+};
+
+/**
+ * Helper function to convert File to base64 string
+ */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}

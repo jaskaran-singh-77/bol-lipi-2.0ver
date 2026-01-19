@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { extractFieldData, generateSpeech, GeminiError } from '../services/geminiService';
+import { extractFieldData, generateSpeech, extractFromDocument, GeminiError } from '../services/geminiService';
 import { FormData, Language, SpeechRecognition, SpeechRecognitionEvent, SpeechRecognitionErrorEvent, ConversationTurn, SubmittedForm } from '../types';
 
 interface VoiceFormDemoProps {
@@ -80,6 +80,13 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
   const [sessionHistory, setSessionHistory] = useState<ConversationTurn[]>([]);
   const [submissionHistory, setSubmissionHistory] = useState<SubmittedForm[]>([]);
   const [showSubmissionHistory, setShowSubmissionHistory] = useState(false);
+  
+  // Document upload states
+  const [inputMode, setInputMode] = useState<'voice' | 'document'>('voice');
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const isRecognitionActive = useRef(false);
@@ -272,6 +279,86 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
     setSessionHistory([]);
     setIsQuotaExhausted(false);
     setTtsError(null);
+    setUploadedFile(null);
+    setIsExtracting(false);
+  };
+
+  // Document upload handlers
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      handleFile(e.target.files[0]);
+    }
+  };
+
+  const handleFile = (file: File) => {
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'];
+    if (!validTypes.includes(file.type)) {
+      alert(currentLang === Language.HINDI 
+        ? 'कृपया एक वैध फ़ाइल अपलोड करें (JPG, PNG, PDF)' 
+        : 'Please upload a valid file (JPG, PNG, PDF)');
+      return;
+    }
+    setUploadedFile(file);
+  };
+
+  const handleExtractFromDocument = async () => {
+    if (!uploadedFile) return;
+    
+    setIsExtracting(true);
+    addToHistory('user', `Uploaded document: ${uploadedFile.name}`);
+    
+    try {
+      const extractedData = await extractFromDocument(uploadedFile);
+      setFormState(extractedData);
+      
+      const successMsg = currentLang === Language.HINDI 
+        ? 'डेटा सफलतापूर्वक निकाला गया!' 
+        : 'Data extracted successfully!';
+      addToHistory('assistant', successMsg);
+      setFeedbackMessage(successMsg);
+      
+      if (!isQuotaExhausted) {
+        await speak(successMsg);
+      }
+    } catch (err: any) {
+      console.error("Document extraction error:", err);
+      if (err instanceof GeminiError && err.isQuotaExceeded()) {
+        setIsQuotaExhausted(true);
+        const quotaMsg = currentLang === Language.HINDI 
+          ? 'सिस्टम व्यस्त है। कृपया मैनुअल रूप से भरें।' 
+          : 'System Busy (Quota Hit). Please fill manually.';
+        addToHistory('assistant', quotaMsg);
+        setFeedbackMessage(quotaMsg);
+      } else {
+        const errorMsg = currentLang === Language.HINDI 
+          ? 'डेटा निकालने में त्रुटि। कृपया पुनः प्रयास करें।' 
+          : 'Error extracting data. Please try again.';
+        addToHistory('assistant', errorMsg);
+        setFeedbackMessage(errorMsg);
+      }
+    } finally {
+      setIsExtracting(false);
+    }
   };
 
   useEffect(() => {
@@ -491,7 +578,38 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
       )}
 
       {/* Main Container - md:h-[750px] locks the height on desktop to enable internal scrolling without page shift */}
-      <div className="bg-white dark:bg-[#1e293b] rounded-3xl shadow-2xl overflow-hidden border border-slate-200 dark:border-slate-700 flex flex-col md:flex-row min-h-[700px] md:h-[750px]">
+      <div className="bg-white dark:bg-[#1e293b] rounded-3xl shadow-2xl overflow-hidden border border-slate-200 dark:border-slate-700 flex flex-col min-h-[700px] md:h-[750px]">
+        
+        {/* Mode Toggle */}
+        <div className="w-full flex justify-center py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20">
+          <div className="bg-slate-100 dark:bg-slate-800 rounded-2xl p-1 flex gap-1 shadow-lg border border-slate-200 dark:border-slate-700">
+            <button
+              onClick={() => setInputMode('voice')}
+              className={`px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${
+                inputMode === 'voice'
+                  ? 'bg-primary text-white shadow-md'
+                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <span className="material-symbols-outlined text-lg">mic</span>
+              {currentLang === Language.HINDI ? 'आवाज़' : 'Voice'}
+            </button>
+            <button
+              onClick={() => setInputMode('document')}
+              className={`px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${
+                inputMode === 'document'
+                  ? 'bg-primary text-white shadow-md'
+                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <span className="material-symbols-outlined text-lg">upload_file</span>
+              {currentLang === Language.HINDI ? 'दस्तावेज़' : 'Document'}
+            </button>
+          </div>
+        </div>
+        
+        {/* Content Area */}
+        <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
         
         {/* Left: Interactive Assistant + Chat History */}
         <div className="md:w-1/2 flex flex-col border-b md:border-b-0 md:border-r border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20">
@@ -563,57 +681,143 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
 
           {/* Interactive Controls Overlay at Bottom */}
           <div className="p-6 bg-white dark:bg-[#1e293b] border-t border-slate-100 dark:border-slate-800 flex flex-col items-center gap-6">
-            <div className="flex items-center justify-center gap-8">
-              <button 
-                onClick={handleSkip}
-                disabled={currentFieldIndex === null || isQuotaExhausted}
-                className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center transition-all disabled:opacity-20 active:scale-90"
-                title="Skip Field"
-              >
-                <span className="material-symbols-outlined">fast_forward</span>
-              </button>
+            
+            {inputMode === 'voice' ? (
+              // Voice Mode Controls
+              <>
+                <div className="flex items-center justify-center gap-8">
+                  <button 
+                    onClick={handleSkip}
+                    disabled={currentFieldIndex === null || isQuotaExhausted}
+                    className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center transition-all disabled:opacity-20 active:scale-90"
+                    title="Skip Field"
+                  >
+                    <span className="material-symbols-outlined">fast_forward</span>
+                  </button>
 
-              <div className="relative">
-                {isListening && <div className="absolute inset-[-4px] bg-primary/20 rounded-full animate-ping"></div>}
-                {isSpeaking && <div className="absolute inset-[-8px] border-2 border-dashed border-accent-green/30 rounded-full animate-[spin_6s_linear_infinite]"></div>}
-                
-                <button
-                  onClick={currentFieldIndex === null ? handleManualReset : toggleListening}
-                  disabled={isQuotaExhausted && currentFieldIndex !== null && !isListening && !isSpeaking}
-                  className={`relative z-10 w-20 h-20 rounded-full flex flex-col items-center justify-center shadow-2xl transition-all duration-500 ${
-                    isListening 
-                      ? 'bg-red-500 scale-110 shadow-red-500/30' 
-                      : isSpeaking ? 'bg-accent-green shadow-green-500/30' : 'bg-primary hover:bg-primary-dark hover:scale-105 shadow-primary/40'
-                  } ${isQuotaExhausted && currentFieldIndex !== null && !isListening && !isSpeaking ? 'opacity-50 grayscale cursor-not-allowed' : ''}`}
-                >
-                  <span className="material-symbols-outlined text-3xl text-white">
-                    {currentFieldIndex === null ? 'play_arrow' : isListening ? 'mic' : isSpeaking ? 'graphic_eq' : 'mic'}
-                  </span>
-                </button>
-              </div>
+                  <div className="relative">
+                    {isListening && <div className="absolute inset-[-4px] bg-primary/20 rounded-full animate-ping"></div>}
+                    {isSpeaking && <div className="absolute inset-[-8px] border-2 border-dashed border-accent-green/30 rounded-full animate-[spin_6s_linear_infinite]"></div>}
+                    
+                    <button
+                      onClick={currentFieldIndex === null ? handleManualReset : toggleListening}
+                      disabled={isQuotaExhausted && currentFieldIndex !== null && !isListening && !isSpeaking}
+                      className={`relative z-10 w-20 h-20 rounded-full flex flex-col items-center justify-center shadow-2xl transition-all duration-500 ${
+                        isListening 
+                          ? 'bg-red-500 scale-110 shadow-red-500/30' 
+                          : isSpeaking ? 'bg-accent-green shadow-green-500/30' : 'bg-primary hover:bg-primary-dark hover:scale-105 shadow-primary/40'
+                      } ${isQuotaExhausted && currentFieldIndex !== null && !isListening && !isSpeaking ? 'opacity-50 grayscale cursor-not-allowed' : ''}`}
+                    >
+                      <span className="material-symbols-outlined text-3xl text-white">
+                        {currentFieldIndex === null ? 'play_arrow' : isListening ? 'mic' : isSpeaking ? 'graphic_eq' : 'mic'}
+                      </span>
+                    </button>
+                  </div>
 
-              <button 
-                onClick={() => { stopAllAudio(); stopListening(); }}
-                className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center justify-center transition-all active:scale-90"
-                title="Stop"
-              >
-                <span className="material-symbols-outlined">stop_circle</span>
-              </button>
-            </div>
-
-            <div className="h-4 flex items-center gap-1">
-              {isProcessing && (
-                <div className="flex gap-1.5 items-center">
-                  <div className="w-1.5 h-1.5 bg-accent-orange rounded-full animate-bounce"></div>
-                  <div className="w-1.5 h-1.5 bg-accent-orange rounded-full animate-bounce delay-75"></div>
-                  <div className="w-1.5 h-1.5 bg-accent-orange rounded-full animate-bounce delay-150"></div>
-                  <span className="text-[9px] font-black text-accent-orange uppercase tracking-widest ml-1">AI Thinking</span>
+                  <button 
+                    onClick={() => { stopAllAudio(); stopListening(); }}
+                    className="w-12 h-12 rounded-full bg-slate-100 dark:bg-slate-800 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center justify-center transition-all active:scale-90"
+                    title="Stop"
+                  >
+                    <span className="material-symbols-outlined">stop_circle</span>
+                  </button>
                 </div>
-              )}
-              {!isProcessing && isListening && <span className="text-[9px] font-black text-red-500 uppercase tracking-widest animate-pulse">Listening...</span>}
-              {!isProcessing && isSpeaking && <span className="text-[9px] font-black text-accent-green uppercase tracking-widest animate-pulse">Speaking...</span>}
-              {isQuotaExhausted && !isListening && !isSpeaking && !isProcessing && <span className="text-[9px] font-black text-red-400 uppercase tracking-widest">AI Disabled</span>}
-            </div>
+
+                <div className="h-4 flex items-center gap-1">
+                  {isProcessing && (
+                    <div className="flex gap-1.5 items-center">
+                      <div className="w-1.5 h-1.5 bg-accent-orange rounded-full animate-bounce"></div>
+                      <div className="w-1.5 h-1.5 bg-accent-orange rounded-full animate-bounce delay-75"></div>
+                      <div className="w-1.5 h-1.5 bg-accent-orange rounded-full animate-bounce delay-150"></div>
+                      <span className="text-[9px] font-black text-accent-orange uppercase tracking-widest ml-1">AI Thinking</span>
+                    </div>
+                  )}
+                  {!isProcessing && isListening && <span className="text-[9px] font-black text-red-500 uppercase tracking-widest animate-pulse">Listening...</span>}
+                  {!isProcessing && isSpeaking && <span className="text-[9px] font-black text-accent-green uppercase tracking-widest animate-pulse">Speaking...</span>}
+                  {isQuotaExhausted && !isListening && !isSpeaking && !isProcessing && <span className="text-[9px] font-black text-red-400 uppercase tracking-widest">AI Disabled</span>}
+                </div>
+              </>
+            ) : (
+              // Document Upload Mode
+              <div className="w-full max-w-md">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,.pdf"
+                  onChange={handleFileInput}
+                  className="hidden"
+                />
+                
+                {!uploadedFile ? (
+                  <div
+                    onDragEnter={handleDrag}
+                    onDragLeave={handleDrag}
+                    onDragOver={handleDrag}
+                    onDrop={handleDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-3xl p-12 text-center cursor-pointer transition-all ${
+                      dragActive
+                        ? 'border-primary bg-primary/5 scale-105'
+                        : 'border-slate-300 dark:border-slate-600 hover:border-primary hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-6xl text-primary mb-4 block">upload_file</span>
+                    <p className="text-slate-700 dark:text-slate-300 font-bold mb-2">
+                      {currentLang === Language.HINDI ? 'दस्तावेज़ अपलोड करें' : 'Upload Document'}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {currentLang === Language.HINDI 
+                        ? 'क्लिक करें या फ़ाइल खींचें (JPG, PNG, PDF)' 
+                        : 'Click or drag file (JPG, PNG, PDF)'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-slate-50 dark:bg-slate-800 rounded-3xl p-6 border border-slate-200 dark:border-slate-700">
+                    <div className="flex items-center gap-4 mb-4">
+                      <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+                        <span className="material-symbols-outlined text-primary text-2xl">description</span>
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-bold text-slate-800 dark:text-white text-sm truncate">{uploadedFile.name}</p>
+                        <p className="text-xs text-slate-500">{(uploadedFile.size / 1024).toFixed(2)} KB</p>
+                      </div>
+                      <button
+                        onClick={() => setUploadedFile(null)}
+                        className="w-8 h-8 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-600 hover:bg-red-200 transition-colors flex items-center justify-center"
+                      >
+                        <span className="material-symbols-outlined text-lg">close</span>
+                      </button>
+                    </div>
+                    
+                    <button
+                      onClick={handleExtractFromDocument}
+                      disabled={isExtracting}
+                      className={`w-full py-3 rounded-xl font-bold text-white transition-all flex items-center justify-center gap-2 ${
+                        isExtracting
+                          ? 'bg-slate-400 cursor-not-allowed'
+                          : 'bg-primary hover:bg-blue-700 shadow-lg shadow-primary/30 hover:scale-105'
+                      }`}
+                    >
+                      {isExtracting ? (
+                        <>
+                          <div className="flex gap-1">
+                            <div className="w-2 h-2 bg-white rounded-full animate-bounce"></div>
+                            <div className="w-2 h-2 bg-white rounded-full animate-bounce delay-75"></div>
+                            <div className="w-2 h-2 bg-white rounded-full animate-bounce delay-150"></div>
+                          </div>
+                          <span>{currentLang === Language.HINDI ? 'निकाला जा रहा है...' : 'Extracting...'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="material-symbols-outlined">auto_awesome</span>
+                          <span>{currentLang === Language.HINDI ? 'डेटा निकालें' : 'Extract Data'}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -713,6 +917,7 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
               {currentLang === Language.HINDI ? "जानकारी जमा करें" : "Finalize & Submit"}
             </button>
           </div>
+        </div>
         </div>
       </div>
     </div>

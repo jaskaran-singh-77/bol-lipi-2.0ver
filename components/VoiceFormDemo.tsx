@@ -2,9 +2,10 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { extractFieldData, generateSpeech, extractFromDocument, GeminiError } from '../services/geminiService';
 import { FormData, Language, SpeechRecognition, SpeechRecognitionEvent, SpeechRecognitionErrorEvent, ConversationTurn, SubmittedForm } from '../types';
 import { auth, db } from '../services/firebase';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { onAuthStateChanged, User } from 'firebase/auth';
 import { addDoc, collection, getDocs, orderBy, query } from 'firebase/firestore';
 import { decryptFormData, encryptFormData, EncryptedPayload } from '../services/crypto';
+import AuthPanel from './AuthPanel';
 
 interface VoiceFormDemoProps {
   currentLang: Language;
@@ -86,10 +87,6 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
   const [showSubmissionHistory, setShowSubmissionHistory] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [authBusy, setAuthBusy] = useState(false);
   const [isLoadingSubmissions, setIsLoadingSubmissions] = useState(false);
   const [encryptionEnabled, setEncryptionEnabled] = useState(false);
   const [encryptionKey, setEncryptionKey] = useState('');
@@ -636,37 +633,6 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
       }
     }
   };
-
-  const handleSignUp = async () => {
-    if (!authEmail.trim() || !authPassword.trim()) return;
-    setAuthBusy(true);
-    setAuthError(null);
-    try {
-      await createUserWithEmailAndPassword(auth, authEmail.trim(), authPassword);
-    } catch (e: any) {
-      setAuthError(e?.message ?? "Sign up failed");
-    } finally {
-      setAuthBusy(false);
-    }
-  };
-
-  const handleSignIn = async () => {
-    if (!authEmail.trim() || !authPassword.trim()) return;
-    setAuthBusy(true);
-    setAuthError(null);
-    try {
-      await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
-    } catch (e: any) {
-      setAuthError(e?.message ?? "Sign in failed");
-    } finally {
-      setAuthBusy(false);
-    }
-  };
-
-  const handleSignOut = async () => {
-    await signOut(auth);
-    setSubmissionHistory([]);
-  };
   return (
     <div className="w-full max-w-5xl mx-auto p-4 md:p-8">
       {/* Submissions History Modal */}
@@ -988,88 +954,33 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
 
         {/* Right: Smart Form Canvas */}
         <div className="md:w-1/2 p-8 bg-white dark:bg-[#0f1520] overflow-y-auto custom-scrollbar">
-          <div className="mb-6 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30">
+          <AuthPanel user={user} currentLang={currentLang} />
+
+          <div className="mt-6 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30">
             <div className="flex items-center justify-between">
-              <div className="text-sm font-black text-slate-800 dark:text-white">Account</div>
-              <span className={`text-[10px] font-bold px-2 py-1 rounded ${user ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
-                {user ? 'Signed in' : 'Guest'}
-              </span>
+              <div className="text-sm font-black text-slate-800 dark:text-white">Encryption</div>
+              <label className="flex items-center gap-2 text-[10px] font-bold text-slate-600 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={encryptionEnabled}
+                  onChange={(e) => setEncryptionEnabled(e.target.checked)}
+                  className="accent-primary"
+                />
+                Encrypt submissions
+              </label>
             </div>
-
-            {user ? (
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <div className="text-xs text-slate-600 dark:text-slate-300 truncate">{user.email ?? 'Unknown email'}</div>
-                <button
-                  onClick={handleSignOut}
-                  className="px-3 py-1.5 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors"
-                >
-                  Sign out
-                </button>
-              </div>
-            ) : (
-              <div className="mt-3 grid grid-cols-1 gap-2">
-                <input
-                  type="email"
-                  value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
-                  placeholder="Email"
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-200"
-                />
-                <input
-                  type="password"
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  placeholder="Password"
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-200"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleSignIn}
-                    disabled={authBusy}
-                    className="flex-1 px-3 py-2 bg-primary text-white rounded-lg text-xs font-bold hover:brightness-110 disabled:opacity-50"
-                  >
-                    Sign in
-                  </button>
-                  <button
-                    onClick={handleSignUp}
-                    disabled={authBusy}
-                    className="flex-1 px-3 py-2 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-bold hover:bg-slate-300 dark:hover:bg-slate-700 disabled:opacity-50"
-                  >
-                    Sign up
-                  </button>
-                </div>
-                {authError && (
-                  <div className="text-[10px] text-red-500 font-bold">{authError}</div>
-                )}
-              </div>
+            <input
+              type="password"
+              value={encryptionKey}
+              onChange={(e) => setEncryptionKey(e.target.value)}
+              placeholder="Encryption key (min 6 chars)"
+              disabled={!encryptionEnabled}
+              className="mt-2 w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-200 disabled:opacity-50"
+            />
+            <p className="mt-1 text-[10px] text-slate-500">Key is kept only in your browser. If you forget it, encrypted data cannot be recovered.</p>
+            {encryptionError && (
+              <div className="mt-1 text-[10px] text-red-500 font-bold">{encryptionError}</div>
             )}
-
-            <div className="mt-4 border-t border-slate-200 dark:border-slate-700 pt-4">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-black text-slate-800 dark:text-white">Encryption</div>
-                <label className="flex items-center gap-2 text-[10px] font-bold text-slate-600 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={encryptionEnabled}
-                    onChange={(e) => setEncryptionEnabled(e.target.checked)}
-                    className="accent-primary"
-                  />
-                  Encrypt submissions
-                </label>
-              </div>
-              <input
-                type="password"
-                value={encryptionKey}
-                onChange={(e) => setEncryptionKey(e.target.value)}
-                placeholder="Encryption key (min 6 chars)"
-                disabled={!encryptionEnabled}
-                className="mt-2 w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-200 disabled:opacity-50"
-              />
-              <p className="mt-1 text-[10px] text-slate-500">Key is kept only in your browser. If you forget it, encrypted data cannot be recovered.</p>
-              {encryptionError && (
-                <div className="mt-1 text-[10px] text-red-500 font-bold">{encryptionError}</div>
-              )}
-            </div>
           </div>
           <div className="flex justify-between items-center mb-8">
             <div>

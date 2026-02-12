@@ -26,7 +26,7 @@ export const extractFieldData = async (
   fieldLabel: string
 ): Promise<ExtractionResult> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: `The user was asked for their ${fieldLabel} (${fieldName}).
@@ -69,7 +69,7 @@ export const extractFieldData = async (
  */
 export const generateSpeech = async (text: string, lang: 'hi-IN' | 'en-US'): Promise<string | undefined> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
     const prompt = lang === 'hi-IN' 
       ? `कृपया इसे स्वाभाविक और स्पष्ट हिंदी में कहें: ${text}` 
       : `Say this naturally in English: ${text}`;
@@ -106,7 +106,7 @@ export const generateSpeech = async (text: string, lang: 'hi-IN' | 'en-US'): Pro
  */
 export const extractFromDocument = async (file: File): Promise<FormData> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
     
     // Convert file to base64
     const base64Data = await fileToBase64(file);

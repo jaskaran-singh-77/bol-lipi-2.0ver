@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { extractFieldData, generateSpeech, extractFromDocument, GeminiError } from '../services/geminiService';
 import { FormData, Language, SpeechRecognition, SpeechRecognitionEvent, SpeechRecognitionErrorEvent, ConversationTurn, SubmittedForm } from '../types';
+import { auth, db } from '../services/firebase';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { addDoc, collection, getDocs, orderBy, query } from 'firebase/firestore';
+import { decryptFormData, encryptFormData, EncryptedPayload } from '../services/crypto';
 
 interface VoiceFormDemoProps {
   currentLang: Language;
@@ -80,6 +84,16 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
   const [sessionHistory, setSessionHistory] = useState<ConversationTurn[]>([]);
   const [submissionHistory, setSubmissionHistory] = useState<SubmittedForm[]>([]);
   const [showSubmissionHistory, setShowSubmissionHistory] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [isLoadingSubmissions, setIsLoadingSubmissions] = useState(false);
+  const [encryptionEnabled, setEncryptionEnabled] = useState(false);
+  const [encryptionKey, setEncryptionKey] = useState('');
+  const [encryptionError, setEncryptionError] = useState<string | null>(null);
   
   // Document upload states
   const [inputMode, setInputMode] = useState<'voice' | 'document'>('voice');
@@ -95,8 +109,18 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
   const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
-  // Load history from localStorage
+  // Auth state
   useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (nextUser) => {
+      setUser(nextUser);
+      setAuthReady(true);
+    });
+    return () => unsub();
+  }, []);
+
+  // Load history from localStorage (only when logged out)
+  useEffect(() => {
+    if (!authReady || user) return;
     const saved = localStorage.getItem('bol_lipi_submissions');
     if (saved) {
       try {
@@ -105,7 +129,64 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
         console.error("Failed to parse submission history", e);
       }
     }
-  }, []);
+  }, [authReady, user]);
+
+  const loadFirestoreSubmissions = useCallback(async () => {
+    if (!user) return;
+    setIsLoadingSubmissions(true);
+    try {
+      const submissionsRef = collection(db, "users", user.uid, "submissions");
+      const snapshot = await getDocs(query(submissionsRef, orderBy("timestamp", "desc")));
+      const items: SubmittedForm[] = [];
+
+      for (const docSnap of snapshot.docs) {
+        const data = docSnap.data() as {
+          timestamp?: number;
+          data?: FormData;
+          encrypted?: boolean;
+          payload?: EncryptedPayload;
+        };
+
+        let resolvedData: FormData = INITIAL_FORM;
+        let locked = false;
+
+        if (data.encrypted && data.payload) {
+          if (encryptionEnabled && encryptionKey.trim()) {
+            try {
+              resolvedData = await decryptFormData(encryptionKey, data.payload);
+            } catch (e) {
+              locked = true;
+              resolvedData = INITIAL_FORM;
+            }
+          } else {
+            locked = true;
+          }
+        } else if (data.data) {
+          resolvedData = data.data;
+        }
+
+        items.push({
+          id: docSnap.id,
+          timestamp: data.timestamp ?? Date.now(),
+          data: resolvedData,
+          encrypted: !!data.encrypted,
+          locked
+        });
+      }
+
+      setSubmissionHistory(items);
+    } catch (e) {
+      console.error("Failed to load submissions from Firestore", e);
+    } finally {
+      setIsLoadingSubmissions(false);
+    }
+  }, [user, encryptionEnabled, encryptionKey]);
+
+  useEffect(() => {
+    if (user) {
+      loadFirestoreSubmissions();
+    }
+  }, [user, loadFirestoreSubmissions]);
 
   // Scroll to bottom of chat container specifically, without moving the whole page
   useEffect(() => {
@@ -497,26 +578,95 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
   };
 
   const handleSubmit = () => {
+    if (encryptionEnabled && encryptionKey.trim().length < 6) {
+      setEncryptionError(currentLang === Language.HINDI ? "Please enter an encryption key (min 6 characters)." : "Please enter an encryption key (min 6 characters).");
+      return;
+    }
+    setEncryptionError(null);
     const submission: SubmittedForm = {
       id: Math.random().toString(36).substr(2, 9),
       timestamp: Date.now(),
       data: formState
     };
-    const updated = [submission, ...submissionHistory];
-    setSubmissionHistory(updated);
-    localStorage.setItem('bol_lipi_submissions', JSON.stringify(updated));
-    
-    alert(currentLang === Language.HINDI ? "सफलतापूर्वक जमा किया गया!" : "Submitted Successfully!");
-    handleManualReset();
+
+    if (user) {
+      const saveRemote = async () => {
+        const submissionsRef = collection(db, "users", user.uid, "submissions");
+        if (encryptionEnabled && encryptionKey.trim()) {
+          const payload = await encryptFormData(encryptionKey, formState);
+          const docRef = await addDoc(submissionsRef, {
+            timestamp: submission.timestamp,
+            encrypted: true,
+            payload
+          });
+          setSubmissionHistory(prev => [{ ...submission, id: docRef.id, encrypted: true }, ...prev]);
+        } else {
+          const docRef = await addDoc(submissionsRef, {
+            timestamp: submission.timestamp,
+            encrypted: false,
+            data: formState
+          });
+          setSubmissionHistory(prev => [{ ...submission, id: docRef.id, encrypted: false }, ...prev]);
+        }
+      };
+
+      saveRemote()
+        .then(() => {
+          alert(currentLang === Language.HINDI ? "सफलतापूर्वक जमा किया गया!" : "Submitted Successfully!");
+          handleManualReset();
+        })
+        .catch((e) => {
+          console.error("Failed to submit to Firestore", e);
+          alert(currentLang === Language.HINDI ? "Submission failed" : "Submission failed");
+        });
+    } else {
+      const updated = [submission, ...submissionHistory];
+      setSubmissionHistory(updated);
+      localStorage.setItem('bol_lipi_submissions', JSON.stringify(updated));
+      alert(currentLang === Language.HINDI ? "सफलतापूर्वक जमा किया गया!" : "Submitted Successfully!");
+      handleManualReset();
+    }
   };
 
   const clearSubmissionHistory = () => {
     if (confirm(currentLang === Language.HINDI ? "क्या आप वाकई सारा इतिहास मिटाना चाहते हैं?" : "Are you sure you want to clear all history?")) {
       setSubmissionHistory([]);
-      localStorage.removeItem('bol_lipi_submissions');
+      if (!user) {
+        localStorage.removeItem('bol_lipi_submissions');
+      }
     }
   };
 
+  const handleSignUp = async () => {
+    if (!authEmail.trim() || !authPassword.trim()) return;
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      await createUserWithEmailAndPassword(auth, authEmail.trim(), authPassword);
+    } catch (e: any) {
+      setAuthError(e?.message ?? "Sign up failed");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSignIn = async () => {
+    if (!authEmail.trim() || !authPassword.trim()) return;
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
+    } catch (e: any) {
+      setAuthError(e?.message ?? "Sign in failed");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await signOut(auth);
+    setSubmissionHistory([]);
+  };
   return (
     <div className="w-full max-w-5xl mx-auto p-4 md:p-8">
       {/* Submissions History Modal */}
@@ -545,6 +695,9 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
               </div>
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {isLoadingSubmissions && (
+                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Loading...</div>
+              )}
               {submissionHistory.length === 0 ? (
                 <div className="text-center py-20 text-slate-400">
                    <span className="material-symbols-outlined text-6xl mb-4 block opacity-20">inventory_2</span>
@@ -557,18 +710,30 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
                       <span className="text-[10px] font-black uppercase tracking-widest text-primary bg-primary/10 px-2 py-1 rounded">
                         {new Date(sub.timestamp).toLocaleString()}
                       </span>
-                      <span className="text-[10px] font-bold text-slate-400 group-hover:text-primary transition-colors">ID: {sub.id}</span>
+                      <div className="flex items-center gap-2">
+                        {sub.encrypted && (
+                          <span className="text-[9px] font-bold uppercase tracking-widest bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-1 rounded">Encrypted</span>
+                        )}
+                        {sub.locked && (
+                          <span className="text-[9px] font-bold uppercase tracking-widest bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 px-2 py-1 rounded">Locked</span>
+                        )}
+                        <span className="text-[10px] font-bold text-slate-400 group-hover:text-primary transition-colors">ID: {sub.id}</span>
+                      </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                      {Object.entries(sub.data).map(([key, value]) => (
-                        value && (
-                          <div key={key} className="text-xs">
-                            <span className="text-slate-400 font-bold uppercase mr-1">{key}:</span>
-                            <span className="text-slate-700 dark:text-slate-200 font-medium">{value}</span>
-                          </div>
-                        )
-                      ))}
-                    </div>
+                    {sub.locked ? (
+                      <div className="text-xs text-slate-500">Encrypted. Enter the same key to view.</div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                        {Object.entries(sub.data).map(([key, value]) => (
+                          value && (
+                            <div key={key} className="text-xs">
+                              <span className="text-slate-400 font-bold uppercase mr-1">{key}:</span>
+                              <span className="text-slate-700 dark:text-slate-200 font-medium">{value}</span>
+                            </div>
+                          )
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))
               )}
@@ -823,6 +988,89 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
 
         {/* Right: Smart Form Canvas */}
         <div className="md:w-1/2 p-8 bg-white dark:bg-[#0f1520] overflow-y-auto custom-scrollbar">
+          <div className="mb-6 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-black text-slate-800 dark:text-white">Account</div>
+              <span className={`text-[10px] font-bold px-2 py-1 rounded ${user ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
+                {user ? 'Signed in' : 'Guest'}
+              </span>
+            </div>
+
+            {user ? (
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <div className="text-xs text-slate-600 dark:text-slate-300 truncate">{user.email ?? 'Unknown email'}</div>
+                <button
+                  onClick={handleSignOut}
+                  className="px-3 py-1.5 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors"
+                >
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <div className="mt-3 grid grid-cols-1 gap-2">
+                <input
+                  type="email"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="Email"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-200"
+                />
+                <input
+                  type="password"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="Password"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-200"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSignIn}
+                    disabled={authBusy}
+                    className="flex-1 px-3 py-2 bg-primary text-white rounded-lg text-xs font-bold hover:brightness-110 disabled:opacity-50"
+                  >
+                    Sign in
+                  </button>
+                  <button
+                    onClick={handleSignUp}
+                    disabled={authBusy}
+                    className="flex-1 px-3 py-2 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-bold hover:bg-slate-300 dark:hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    Sign up
+                  </button>
+                </div>
+                {authError && (
+                  <div className="text-[10px] text-red-500 font-bold">{authError}</div>
+                )}
+              </div>
+            )}
+
+            <div className="mt-4 border-t border-slate-200 dark:border-slate-700 pt-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-black text-slate-800 dark:text-white">Encryption</div>
+                <label className="flex items-center gap-2 text-[10px] font-bold text-slate-600 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={encryptionEnabled}
+                    onChange={(e) => setEncryptionEnabled(e.target.checked)}
+                    className="accent-primary"
+                  />
+                  Encrypt submissions
+                </label>
+              </div>
+              <input
+                type="password"
+                value={encryptionKey}
+                onChange={(e) => setEncryptionKey(e.target.value)}
+                placeholder="Encryption key (min 6 chars)"
+                disabled={!encryptionEnabled}
+                className="mt-2 w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-200 disabled:opacity-50"
+              />
+              <p className="mt-1 text-[10px] text-slate-500">Key is kept only in your browser. If you forget it, encrypted data cannot be recovered.</p>
+              {encryptionError && (
+                <div className="mt-1 text-[10px] text-red-500 font-bold">{encryptionError}</div>
+              )}
+            </div>
+          </div>
           <div className="flex justify-between items-center mb-8">
             <div>
               <h4 className="text-xl font-black text-slate-800 dark:text-white flex items-center gap-2">
@@ -910,7 +1158,7 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
           <div className="mt-10">
             <button 
               onClick={handleSubmit}
-              disabled={Object.values(formState).every(v => v === '')}
+              disabled={Object.values(formState).every(v => v === '') || (encryptionEnabled && encryptionKey.trim().length < 6)}
               className="w-full py-4 bg-accent-green hover:bg-emerald-600 disabled:opacity-30 disabled:hover:bg-accent-green text-white font-black text-lg rounded-2xl shadow-xl shadow-green-500/20 transition-all flex items-center justify-center gap-3 active:scale-95"
             >
               <span className="material-symbols-outlined text-2xl">rocket_launch</span>

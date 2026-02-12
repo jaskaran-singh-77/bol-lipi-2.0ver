@@ -31,6 +31,8 @@ export interface SubmittedForm {
   id: string;
   timestamp: number;
   data: FormData;
+  encrypted?: boolean;
+  locked?: boolean;
 }
 
 export interface ArchitectureLayer {

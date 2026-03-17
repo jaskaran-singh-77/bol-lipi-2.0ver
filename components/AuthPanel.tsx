@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, User } from 'firebase/auth';
-import { auth } from '../services/firebase';
+import { auth, firebaseUnavailableReason, hasFirebaseConfig } from '../services/firebase';
 import { Language } from '../types';
 
 interface AuthPanelProps {
@@ -18,6 +18,10 @@ const AuthPanel: React.FC<AuthPanelProps> = ({ user, currentLang }) => {
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!auth) {
+      setError(firebaseUnavailableReason || 'Firebase is not configured');
+      return;
+    }
     if (!email.trim() || !password.trim()) {
       setError(currentLang === Language.HINDI ? 'कृपया सभी फ़ील्ड भरें' : 'Please fill all fields');
       return;
@@ -54,6 +58,10 @@ const AuthPanel: React.FC<AuthPanelProps> = ({ user, currentLang }) => {
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!auth) {
+      setError(firebaseUnavailableReason || 'Firebase is not configured');
+      return;
+    }
     if (!email.trim() || !password.trim()) {
       setError(currentLang === Language.HINDI ? 'कृपया सभी फ़ील्ड भरें' : 'Please fill all fields');
       return;
@@ -83,6 +91,10 @@ const AuthPanel: React.FC<AuthPanelProps> = ({ user, currentLang }) => {
   };
 
   const handleSignOut = async () => {
+    if (!auth) {
+      setError(firebaseUnavailableReason || 'Firebase is not configured');
+      return;
+    }
     try {
       await signOut(auth);
       setSuccess(currentLang === Language.HINDI ? 'साइन आउट सफल' : 'Signed out successfully');
@@ -106,6 +118,14 @@ const AuthPanel: React.FC<AuthPanelProps> = ({ user, currentLang }) => {
           {user ? (currentLang === Language.HINDI ? 'साइन इन' : 'Signed in') : (currentLang === Language.HINDI ? 'अतिथि' : 'Guest')}
         </span>
       </div>
+
+      {!hasFirebaseConfig && (
+        <div className="mb-3 p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-700 text-xs font-medium dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300">
+          {currentLang === Language.HINDI
+            ? 'Firebase कॉन्फ़िगर नहीं है। अकाउंट फीचर अभी बंद है, लेकिन लोकल हिस्ट्री काम करेगी।'
+            : 'Firebase is not configured. Account features are disabled, but local history will still work.'}
+        </div>
+      )}
 
       {user ? (
         <div className="space-y-3">

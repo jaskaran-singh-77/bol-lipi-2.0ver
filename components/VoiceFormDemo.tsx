@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { extractFieldData, generateSpeech, extractFromDocument, GeminiError } from '../services/geminiService';
 import { FormData, Language, SpeechRecognition, SpeechRecognitionEvent, SpeechRecognitionErrorEvent, ConversationTurn, SubmittedForm } from '../types';
-import { auth, db } from '../services/firebase';
+import { auth, db, hasFirebaseConfig } from '../services/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { addDoc, collection, getDocs, orderBy, query } from 'firebase/firestore';
 import { decryptFormData, encryptFormData, EncryptedPayload } from '../services/crypto';
@@ -108,6 +108,11 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
 
   // Auth state
   useEffect(() => {
+    if (!auth) {
+      setAuthReady(true);
+      return;
+    }
+
     const unsub = onAuthStateChanged(auth, (nextUser) => {
       setUser(nextUser);
       setAuthReady(true);
@@ -129,7 +134,7 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
   }, [authReady, user]);
 
   const loadFirestoreSubmissions = useCallback(async () => {
-    if (!user) return;
+    if (!user || !db) return;
     setIsLoadingSubmissions(true);
     try {
       const submissionsRef = collection(db, "users", user.uid, "submissions");
@@ -586,7 +591,7 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
       data: formState
     };
 
-    if (user) {
+    if (user && db) {
       const saveRemote = async () => {
         const submissionsRef = collection(db, "users", user.uid, "submissions");
         if (encryptionEnabled && encryptionKey.trim()) {
@@ -955,6 +960,14 @@ const VoiceFormDemo: React.FC<VoiceFormDemoProps> = ({ currentLang }) => {
         {/* Right: Smart Form Canvas */}
         <div className="md:w-1/2 p-8 bg-white dark:bg-[#0f1520] overflow-y-auto custom-scrollbar">
           <AuthPanel user={user} currentLang={currentLang} />
+
+          {!hasFirebaseConfig && (
+            <div className="mt-4 p-3 rounded-2xl border border-amber-200 bg-amber-50 text-amber-700 text-xs font-medium dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300">
+              {currentLang === Language.HINDI
+                ? 'क्लाउड सेविंग अभी बंद है क्योंकि Firebase env vars Vercel पर सेट नहीं हैं। सबमिशन इस ब्राउज़र में लोकली सेव होंगे।'
+                : 'Cloud saving is currently disabled because the Firebase env vars are not set on Vercel. Submissions will be saved locally in this browser.'}
+            </div>
+          )}
 
           <div className="mt-6 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/30">
             <div className="flex items-center justify-between">

@@ -25,6 +25,19 @@ View your app in AI Studio: https://ai.studio/apps/drive/1TrtXubLddd2XFCwX4vd9Kb
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Set `VITE_GEMINI_API_KEY` in `.env.local`
+3. If you want Firebase auth/history, also set:
+   `VITE_FIREBASE_API_KEY`
+   `VITE_FIREBASE_AUTH_DOMAIN`
+   `VITE_FIREBASE_PROJECT_ID`
+   `VITE_FIREBASE_STORAGE_BUCKET`
+   `VITE_FIREBASE_MESSAGING_SENDER_ID`
+   `VITE_FIREBASE_APP_ID`
+   `VITE_FIREBASE_MEASUREMENT_ID`
+4. Run the app:
    `npm run dev`
+
+## Vercel
+
+Add the same `VITE_*` variables in Vercel Project Settings -> Environment Variables.
+If the Firebase variables are missing, the app will now fall back to local-only mode instead of crashing on load.

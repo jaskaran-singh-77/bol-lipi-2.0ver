@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getAuth, type Auth } from "firebase/auth";
+import { getFirestore, type Firestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -12,15 +12,22 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
-// Debug: Check if config is loaded
-console.log('Firebase Config Check:', {
-  hasApiKey: !!firebaseConfig.apiKey,
-  hasAuthDomain: !!firebaseConfig.authDomain,
-  hasProjectId: !!firebaseConfig.projectId,
-  projectId: firebaseConfig.projectId
-});
+const requiredFirebaseKeys = ["apiKey", "authDomain", "projectId", "appId"] as const;
+const hasFirebaseConfig = requiredFirebaseKeys.every((key) => Boolean(firebaseConfig[key]));
 
-const app = initializeApp(firebaseConfig);
+const firebaseUnavailableReason = hasFirebaseConfig
+  ? null
+  : "Firebase is not configured. Set the VITE_FIREBASE_* variables in your deployment environment.";
 
-export const auth = getAuth(app);
-export const db = getFirestore(app);
+let auth: Auth | null = null;
+let db: Firestore | null = null;
+
+if (hasFirebaseConfig) {
+  const app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} else {
+  console.warn(firebaseUnavailableReason);
+}
+
+export { auth, db, hasFirebaseConfig, firebaseUnavailableReason };
